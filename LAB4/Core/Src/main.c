@@ -6,18 +6,20 @@
   ******************************************************************************
   * @attention
   *
-  * Copyright (c) 2025 STMicroelectronics.
-  * All rights reserved.
+  * <h2><center>&copy; Copyright (c) 2023 STMicroelectronics.
+  * All rights reserved.</center></h2>
   *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
+  * This software component is licensed by ST under BSD 3-Clause license,
+  * the "License"; You may not use this file except in compliance with the
+  * License. You may obtain a copy of the License at:
+  *                        opensource.org/licenses/BSD-3-Clause
   *
   ******************************************************************************
   */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "i2c.h"
 #include "spi.h"
 #include "tim.h"
 #include "gpio.h"
@@ -25,7 +27,12 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "software_timer.h"
+#include "led_7seg.h"
+#include "button.h"
+#include "lcd.h"
+#include "picture.h"
+#include "ds3231.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -35,7 +42,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -46,13 +52,32 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-
+uint8_t count_led_debug = 0;
+uint8_t count_modify = 0;
+uint8_t count_timer = 0;
+uint8_t temp = 0;
+uint8_t temp_timer = 0;
+uint8_t flag = 0;
+enum Mode {
+	modeInit,
+	modeNormal,
+	modeModify,
+	modeAlarm,
+};
+enum Mode currentMode = modeInit;
+uint8_t temp_time[7];
+uint8_t timer[7];
+uint8_t timerPresent[7];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-
+void system_init();
+void test_LedDebug();
+void displayTime();
+void updateTime();
+void fsm();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -92,17 +117,28 @@ int main(void)
   MX_TIM2_Init();
   MX_SPI1_Init();
   MX_FSMC_Init();
-  MX_TIM4_Init();
+  MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
-
+ system_init();
+ ds3231_init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+ lcd_Clear(BLACK);
+ updateTime();
   while (1)
   {
+	  while(!flag_timer2);
+	  flag_timer2 = 0;
+	  ds3231_ReadTime();
+	  button_Scan();
+	  test_LedDebug();
+	  //displayTime();
+	  fsm();
     /* USER CODE END WHILE */
-
+//	  HAL_GPIO_TogglePin ( DEBUG_LED_GPIO_Port , DEBUG_LED_Pin ) ;
+//	  HAL_Delay (1000) ;
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
@@ -125,11 +161,12 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLM = 4;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLM = 8;
   RCC_OscInitStruct.PLL.PLLN = 168;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 4;
@@ -154,7 +191,432 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+void system_init(){
+	  HAL_GPIO_WritePin(OUTPUT_Y0_GPIO_Port, OUTPUT_Y0_Pin, 0);
+	  HAL_GPIO_WritePin(OUTPUT_Y1_GPIO_Port, OUTPUT_Y1_Pin, 0);
+	  HAL_GPIO_WritePin(DEBUG_LED_GPIO_Port, DEBUG_LED_Pin, 0);
+//	  if (HAL_I2C_IsDeviceReady(&hi2c1, 0x68 << 1, 3, 100) == HAL_OK)
+	  //ds3231_init();
+	  timer_init();
+	  led7_init();
+	  button_init();
+	  lcd_init();
+	  setTimer2(50);
+}
 
+void test_LedDebug(){
+	count_led_debug = (count_led_debug + 1)%20;
+	if(count_led_debug == 0){
+		HAL_GPIO_TogglePin(DEBUG_LED_GPIO_Port, DEBUG_LED_Pin);
+	}
+}
+
+void test_7seg(){
+	led7_SetDigit(0, 0, 0);
+	led7_SetDigit(5, 1, 0);
+	led7_SetDigit(4, 2, 0);
+	led7_SetDigit(7, 3, 0);
+}
+void test_button(){
+	for(int i = 0; i < 16; i++){
+		if(button_count[i] == 1){
+			led7_SetDigit(i/10, 2, 0);
+			led7_SetDigit(i%10, 3, 0);
+		}
+	}
+}
+
+void updateTime(){
+	ds3231_Write(ADDRESS_YEAR, 25);
+	ds3231_Write(ADDRESS_MONTH, 10);
+	ds3231_Write(ADDRESS_DATE, 31);
+	ds3231_Write(ADDRESS_DAY, 6);
+	ds3231_Write(ADDRESS_HOUR, 9);
+	ds3231_Write(ADDRESS_MIN, 30);
+	ds3231_Write(ADDRESS_SEC, 10);
+}
+
+uint8_t isButtonUp()
+{
+    if (button_count[3] == 1)
+        return 1;
+    else
+        return 0;
+}
+uint8_t isButtonDown()
+{
+    if (button_count[7] == 1)
+        return 1;
+    else
+        return 0;
+}
+char* returnMode() {
+	switch (currentMode) {
+		case modeInit:
+			return "Initial";
+			break;
+		case modeNormal:
+			return "Normal Mode";
+			break;
+		case modeModify:
+			return "Time Setting";
+			break;
+		case modeAlarm:
+			return "Set Alarm";
+			break;
+	}
+	return "Error!";
+}
+
+static uint8_t daysInMonth(uint8_t month, uint8_t year2d) {
+    switch (month) {
+        case 1: case 3: case 5: case 7: case 8: case 10: case 12: return 31;
+        case 4: case 6: case 9: case 11: return 30;
+        case 2: {
+            uint16_t y = 2000 + year2d;
+            uint8_t leap = ((y % 4 == 0 && y % 100 != 0) || (y % 400 == 0));
+            return leap ? 29 : 28;
+        }
+        default: return 31;
+    }
+}
+
+void checkTime() {
+    switch (temp) {
+        case 0:
+            if (temp_time[0] > 23) temp_time[0] = 0;
+            break;
+        case 1:
+            if (temp_time[1] > 59) temp_time[1] = 0;
+            break;
+        case 2:
+            if (temp_time[2] > 59) temp_time[2] = 0;
+            break;
+        case 3:
+            if (temp_time[3] < 1 || temp_time[3] > 8) temp_time[3] = 2;
+            break;
+        case 4: {
+            uint8_t maxd = daysInMonth(temp_time[5], temp_time[6]);
+            if (temp_time[4] < 1) temp_time[4] = 1;
+            if (temp_time[4] > maxd) temp_time[4] = 1;
+        } break;
+        case 5: {
+            if (temp_time[5] < 1) temp_time[5] = 1;
+            if (temp_time[5] > 12) temp_time[5] = 1;
+            uint8_t maxd = daysInMonth(temp_time[5], temp_time[6]);
+            if (temp_time[4] > maxd) temp_time[4] = maxd;
+        } break;
+        case 6: {
+            if (temp_time[6] > 99) temp_time[6] = 0;
+            uint8_t maxd = daysInMonth(temp_time[5], temp_time[6]);
+            if (temp_time[4] > maxd) temp_time[4] = maxd;
+        } break;
+    }
+}
+
+void checkTimer() {
+    switch (temp_timer) {
+        case 0:
+            if (timer[0] > 23) timer[0] = 0;
+            break;
+        case 1:
+            if (timer[1] > 59) timer[1] = 0;
+            break;
+        case 2:
+            if (timer[2] > 59) timer[2] = 0;
+            break;
+        case 3:
+            if (timer[3] < 1 || timer[3] > 8) timer[3] = 2;
+            break;
+        case 4: {
+            uint8_t maxd = daysInMonth(timer[5], timer[6]);
+            if (timer[4] < 1) timer[4] = 1;
+            if (timer[4] > maxd) timer[4] = 1;
+        } break;
+        case 5: {
+            if (timer[5] < 1) timer[5] = 1;
+            if (timer[5] > 12) timer[5] = 1;
+            uint8_t maxd = daysInMonth(timer[5], timer[6]);
+            if (timer[4] > maxd) timer[4] = maxd;
+        } break;
+        case 6: {
+            if (timer[6] > 99) timer[6] = 0;
+            uint8_t maxd = daysInMonth(timer[5], timer[6]);
+            if (timer[4] > maxd) timer[4] = maxd;
+        } break;
+    }
+}
+
+
+void displayTime(){
+	lcd_StrCenter(0, 50, returnMode(), WHITE, BLACK, 24, 0);
+	lcd_ShowIntNum(70, 100, ds3231_hours, 2, GREEN, BLACK, 24);
+	lcd_ShowIntNum(110, 100, ds3231_min, 2, GREEN, BLACK, 24);
+	lcd_ShowIntNum(150, 100, ds3231_sec, 2, GREEN, BLACK, 24);
+	lcd_ShowIntNum(20, 130, ds3231_day, 2, YELLOW, BLACK, 24);
+	lcd_ShowIntNum(70, 130, ds3231_date, 2, YELLOW, BLACK, 24);
+	lcd_ShowIntNum(110, 130, ds3231_month, 2, YELLOW, BLACK, 24);
+	lcd_ShowIntNum(150, 130, ds3231_year, 2, YELLOW, BLACK, 24);
+}
+
+void modifyTime() {
+	count_modify = (count_modify + 1) % 10;
+	if (count_modify > 5) {
+		switch (temp){
+			case 0:
+				lcd_ShowIntNum(70, 100, "  ", 2, BLACK, BLACK, 24);
+				break;
+			case 1:
+				lcd_ShowIntNum(110, 100, "  ", 2, BLACK, BLACK, 24);
+				break;
+			case 2:
+				lcd_ShowIntNum(150, 100, "  ", 2, BLACK, BLACK, 24);
+				break;
+			case 3:
+				lcd_ShowIntNum(20, 130, "  ", 2, BLACK, BLACK, 24);
+				break;
+			case 4:
+				lcd_ShowIntNum(70, 130, "  ", 2, BLACK, BLACK, 24);
+				break;
+			case 5:
+				lcd_ShowIntNum(110, 130, "  ", 2, BLACK, BLACK, 24);
+				break;
+			case 6:
+				lcd_ShowIntNum(150, 130, "  ", 2, BLACK, BLACK, 24);
+				break;
+		}
+	} else {
+		lcd_StrCenter(0, 50, returnMode(), WHITE, BLACK, 24, 0);
+		lcd_ShowIntNum(70, 100, temp_time[0], 2, GREEN, BLACK, 24);
+		lcd_ShowIntNum(110, 100, temp_time[1], 2, GREEN, BLACK, 24);
+		lcd_ShowIntNum(150, 100, temp_time[2], 2, GREEN, BLACK, 24);
+		lcd_ShowIntNum(20, 130, temp_time[3], 2, YELLOW, BLACK, 24);
+		lcd_ShowIntNum(70, 130, temp_time[4], 2, YELLOW, BLACK, 24);
+		lcd_ShowIntNum(110, 130, temp_time[5], 2, YELLOW, BLACK, 24);
+		lcd_ShowIntNum(150, 130, temp_time[6], 2, YELLOW, BLACK, 24);
+	}
+
+	if (button_count[3] == 1) {
+		temp_time[temp]++;
+		checkTime();
+	}
+
+	if (button_count[3] > 40 && button_count[3] % 4 == 1) {
+		temp_time[temp]++;
+		checkTime();
+	}
+
+	if (button_count[12] == 1) {
+		switch (temp){
+			case 0:
+				ds3231_Write(ADDRESS_HOUR, temp_time[temp]);
+				break;
+			case 1:
+				ds3231_Write(ADDRESS_MIN, temp_time[temp]);
+				break;
+			case 2:
+				ds3231_Write(ADDRESS_SEC, temp_time[temp]);
+				break;
+			case 3:
+				ds3231_Write(ADDRESS_DAY, temp_time[temp]);
+				break;
+			case 4:
+				ds3231_Write(ADDRESS_DATE, temp_time[temp]);
+				break;
+			case 5:
+				ds3231_Write(ADDRESS_MONTH, temp_time[temp]);
+				break;
+			case 6:
+				ds3231_Write(ADDRESS_YEAR, temp_time[temp]);
+				break;
+		}
+		temp++;
+		if (temp > 6) {
+			temp = 0;
+		}
+	}
+}
+
+void modifyTimer() {
+	count_timer = (count_timer + 1) % 10;
+	if (count_timer > 5) {
+		switch (temp_timer){
+			case 0:
+				lcd_ShowIntNum(70, 100, "  ", 2, BLACK, BLACK, 24);
+				break;
+			case 1:
+				lcd_ShowIntNum(110, 100, "  ", 2, BLACK, BLACK, 24);
+				break;
+			case 2:
+				lcd_ShowIntNum(150, 100, "  ", 2, BLACK, BLACK, 24);
+				break;
+			case 3:
+				lcd_ShowIntNum(20, 130, "  ", 2, BLACK, BLACK, 24);
+				break;
+			case 4:
+				lcd_ShowIntNum(70, 130, "  ", 2, BLACK, BLACK, 24);
+				break;
+			case 5:
+				lcd_ShowIntNum(110, 130, "  ", 2, BLACK, BLACK, 24);
+				break;
+			case 6:
+				lcd_ShowIntNum(150, 130, "  ", 2, BLACK, BLACK, 24);
+				break;
+		}
+	} else {
+		lcd_StrCenter(0, 50, returnMode(), WHITE, BLACK, 24, 0);
+		lcd_ShowIntNum(70, 100, timer[0], 2, GREEN, BLACK, 24);
+		lcd_ShowIntNum(110, 100, timer[1], 2, GREEN, BLACK, 24);
+		lcd_ShowIntNum(150, 100, timer[2], 2, GREEN, BLACK, 24);
+		lcd_ShowIntNum(20, 130, timer[3], 2, YELLOW, BLACK, 24);
+		lcd_ShowIntNum(70, 130, timer[4], 2, YELLOW, BLACK, 24);
+		lcd_ShowIntNum(110, 130,timer[5], 2, YELLOW, BLACK, 24);
+		lcd_ShowIntNum(150, 130, timer[6], 2, YELLOW, BLACK, 24);
+	}
+
+	if (button_count[3] == 1) {
+		timer[temp_timer]++;
+		checkTimer();
+	}
+
+	if (button_count[3] > 40 && button_count[3] % 4 == 1) {
+		timer[temp_timer]++;
+		checkTimer();
+	}
+
+	if (button_count[12] == 1) {
+		switch (temp_timer){
+			case 0:
+				timerPresent[temp_timer] = timer[temp_timer];
+				break;
+			case 1:
+				timerPresent[temp_timer] = timer[temp_timer];
+				break;
+			case 2:
+				timerPresent[temp_timer] = timer[temp_timer];
+				break;
+			case 3:
+				timerPresent[temp_timer] = timer[temp_timer];
+				break;
+			case 4:
+				timerPresent[temp_timer] = timer[temp_timer];
+				break;
+			case 5:
+				timerPresent[temp_timer] = timer[temp_timer];
+				break;
+			case 6:
+				timerPresent[temp_timer] = timer[temp_timer];
+				break;
+		}
+		temp_timer++;
+		if (temp_timer> 6) {
+			temp_timer = 0;
+		}
+	}
+}
+
+void fsm() {
+	switch (currentMode) {
+		case modeInit:
+			currentMode = modeNormal;
+			break;
+		case modeNormal:
+			temp = 0;
+			temp_timer = 0;
+			for (int i = 0; i < 7; i++) {
+				temp_time[i] = 0;
+				timer[i] = 0;
+			}
+			displayTime();
+
+			if (ds3231_hours == timerPresent[0] && ds3231_min == timerPresent[1]) {
+			    lcd_Fill(0, 200, 240, 300, BLUE);
+			    lcd_StrCenter(0, 230, "Wake up!", WHITE, BLUE, 24, 0);
+			}
+			else {
+			    lcd_Fill(0, 200, 240, 300, BLACK);
+			    lcd_StrCenter(0, 230, "Wake up!", BLACK, BLACK, 24, 0);
+			}
+
+			if (button_count[0] == 1) {
+				lcd_Fill(0, 50, 240, 75, BLACK);
+				currentMode = modeModify;
+			}
+			break;
+		case modeModify:
+			for (int i = 0; i < 7; i++) {
+				if (temp_time[i] == 0 && flag == 0) {
+					switch (i) {
+						case 0:
+							temp_time[i] = ds3231_hours;
+							break;
+						case 1:
+							temp_time[i] = ds3231_min;
+							break;
+						case 2:
+							temp_time[i] = ds3231_sec;
+							break;
+						case 3:
+							temp_time[i] = ds3231_day;
+							break;
+						case 4:
+							temp_time[i] = ds3231_date;
+							break;
+						case 5:
+							temp_time[i] = ds3231_month;
+							break;
+						case 6:
+							temp_time[i] = ds3231_year;
+							break;
+					}
+				}
+			}
+			flag = 1;
+			modifyTime();
+			if (button_count[0] == 1) {
+				flag = 0;
+				lcd_Fill(0, 50, 240, 75, BLACK);
+				currentMode = modeAlarm;
+			}
+			break;
+		case modeAlarm:
+			for (int i = 0; i < 7; i++) {
+				if (timer[i] == 0 && flag == 0) {
+					switch (i) {
+						case 0:
+							timer[i] = timerPresent[i];
+							break;
+						case 1:
+							timer[i] = timerPresent[i];
+							break;
+						case 2:
+							timer[i] = timerPresent[i];
+							break;
+						case 3:
+							timer[i] = timerPresent[i];
+							break;
+						case 4:
+							timer[i] = timerPresent[i];
+							break;
+						case 5:
+							timer[i] = timerPresent[i];
+							break;
+						case 6:
+							timer[i] = timerPresent[i];
+							break;
+					}
+				}
+			}
+			flag = 1;
+			modifyTimer();
+			if (button_count[0] == 1) {
+				flag = 0;
+				lcd_Fill(0, 50, 240, 75, BLACK);
+				currentMode = modeNormal;
+			}
+			break;
+	}
+}
 /* USER CODE END 4 */
 
 /**
@@ -171,7 +633,8 @@ void Error_Handler(void)
   }
   /* USER CODE END Error_Handler_Debug */
 }
-#ifdef USE_FULL_ASSERT
+
+#ifdef  USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
   *         where the assert_param error has occurred.

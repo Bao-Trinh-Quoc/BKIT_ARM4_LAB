@@ -7,7 +7,7 @@
   ******************************************************************************
   * @attention
   *
-  * Copyright (c) 2025 STMicroelectronics.
+  * Copyright (c) 2024 STMicroelectronics.
   * All rights reserved.
   *
   * This software is licensed under terms that can be found in the LICENSE file
@@ -69,9 +69,9 @@ void MX_FSMC_Init(void)
   Timing.DataLatency = 17;
   Timing.AccessMode = FSMC_ACCESS_MODE_A;
   /* ExtTiming */
-  ExtTiming.AddressSetupTime = 9;
+  ExtTiming.AddressSetupTime = 8;
   ExtTiming.AddressHoldTime = 15;
-  ExtTiming.DataSetupTime = 8;
+  ExtTiming.DataSetupTime = 9;
   ExtTiming.BusTurnAroundDuration = 0;
   ExtTiming.CLKDivision = 16;
   ExtTiming.DataLatency = 17;
